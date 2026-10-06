@@ -75,7 +75,13 @@ pre.hl{position:absolute;inset:0;margin:0;padding:10px;background:none;border-ra
 <main id="main"></main>
 </div>
 <div id="toast" role="status"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+const SUPABASE_URL='https://mhjnrhvzfvyuebigkbgj.supabase.co';
+const SUPABASE_ANON_KEY='sb_publishable_611Cag4DybEyBTcGC0fifw_tCSXJZXp';
+const cloudConfigured=SUPABASE_URL.startsWith('https://')&&!SUPABASE_URL.includes('YOUR_')&&SUPABASE_ANON_KEY.length>20&&!SUPABASE_ANON_KEY.includes('YOUR_');
+const cloud=cloudConfigured&&window.supabase?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
+let cloudReady=false,cloudStatus=cloud?'Connecting to public vault...':'Cloud not configured',cloudUpdatedAt=null,cloudWriteTimer=null,cloudDirty=false,cloudBusy=false,cloudRevision=0;
 const EXT={py:'Python',java:'Java',js:'JavaScript',ts:'TypeScript',jsx:'JavaScript',tsx:'TypeScript',cpp:'C++',c:'C',cs:'C#',go:'Go',rs:'Rust',php:'PHP',rb:'Ruby',swift:'Swift',kt:'Kotlin',sql:'SQL',html:'HTML',css:'CSS',json:'JSON',xml:'XML',md:'Markdown',sh:'Shell'};
 const EXTOF={};Object.entries(EXT).forEach(([e,l])=>{if(!EXTOF[l])EXTOF[l]=e});
 const LANGS=[...new Set(Object.values(EXT))];
@@ -100,8 +106,44 @@ if(!S.items.length&&!localStorage.getItem('codevault')){
 let view='all',sel=null,draft=null,verView=null,query='',drafts={};
 function setSel(id){if(sel&&draft)drafts[sel]=draft;sel=id;draft=drafts[id]||null}
 function mark(){const was=!!draft;draft=readForm();if(!was)renderList()}
-window.addEventListener('beforeunload',e=>{if(draft||Object.keys(drafts).length){e.preventDefault();e.returnValue=''}});
-const save=()=>{try{localStorage.setItem('codevault',JSON.stringify(S))}catch(e){toast('Storage is full. Download your code to avoid losing it.')}};
+window.addEventListener('beforeunload',e=>{if(draft||Object.keys(drafts).length||cloudDirty||cloudBusy){e.preventDefault();e.returnValue=''}});
+function setCloudStatus(message){cloudStatus=message;const el=document.getElementById('cloud-status');if(el)el.textContent=message}
+function saveLocal(){try{localStorage.setItem('codevault',JSON.stringify(S))}catch(e){toast('Storage is full. Download your code to avoid losing it.')}}
+async function writeCloudSnapshot(){
+ if(!cloudReady||cloudBusy||!cloudDirty)return;
+ cloudBusy=true;const revision=cloudRevision,snapshot=JSON.parse(JSON.stringify(S));setCloudStatus('Syncing public vault...');
+ try{
+  const{data,error}=await cloud.from('codevault_state').upsert({id:1,payload:snapshot},{onConflict:'id'}).select('updated_at').single();
+  if(error)throw error;
+  cloudUpdatedAt=data.updated_at;if(revision===cloudRevision)cloudDirty=false;setCloudStatus('Public vault synced');
+ }catch(error){setCloudStatus('Sync failed; saved on this device');console.error('CodeVault cloud sync failed:',error)}
+ finally{cloudBusy=false;if(cloudDirty&&revision!==cloudRevision)scheduleCloudWrite()}
+}
+function scheduleCloudWrite(){clearTimeout(cloudWriteTimer);cloudWriteTimer=setTimeout(writeCloudSnapshot,350)}
+const save=()=>{saveLocal();if(cloudReady){cloudDirty=true;cloudRevision++;scheduleCloudWrite()}};
+async function syncFromCloud(){
+ if(!cloudReady||cloudDirty||cloudBusy||draft||Object.keys(drafts).length)return;
+ try{
+  const{data,error}=await cloud.from('codevault_state').select('payload,updated_at').eq('id',1).maybeSingle();
+  if(error)throw error;
+  if(data&&data.updated_at!==cloudUpdatedAt&&Array.isArray(data.payload?.items)&&Array.isArray(data.payload?.folders)){
+   S=data.payload;cloudUpdatedAt=data.updated_at;saveLocal();if(sel&&!S.items.some(i=>i.id===sel)){sel=null;draft=null}renderAll();toast('Shared library refreshed');
+  }
+ }catch(error){setCloudStatus('Cloud unavailable; retrying');console.error('CodeVault cloud refresh failed:',error)}
+}
+async function startApp(){
+ if(!cloud){cloudStatus=cloudConfigured?'Supabase SDK unavailable':'Cloud not configured';renderAll();return}
+ try{
+  const{data,error}=await cloud.from('codevault_state').select('payload,updated_at').eq('id',1).maybeSingle();
+  if(error)throw error;
+  if(data&&Array.isArray(data.payload?.items)&&Array.isArray(data.payload?.folders)){
+   S=data.payload;cloudUpdatedAt=data.updated_at;saveLocal();cloudReady=true;setCloudStatus('Public vault synced');
+  }else{
+   cloudReady=true;cloudDirty=true;cloudRevision++;await writeCloudSnapshot();
+  }
+ }catch(error){cloudReady=false;cloudStatus='Cloud setup needed';console.error('CodeVault cloud connection failed:',error)}
+ renderAll();
+}
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.className='s';clearTimeout(toast.t);toast.t=setTimeout(()=>t.className='',2000)}
 const live=()=>S.items.filter(i=>!i.deleted);
 function filtered(){
@@ -118,6 +160,7 @@ function renderSide(){
  const L=live(),langs={};L.forEach(i=>langs[i.lang]=(langs[i.lang]||0)+1);
  const nav=(v,label,n)=>`<button class="nav ${view===v?'on':''}" data-v="${esc(v)}"><span>${esc(label)}</span><span>${n}</span></button>`;
  document.getElementById('side').innerHTML=`<h1>CodeVault</h1>
+ <div id="cloud-status" style="margin:0 12px 10px;color:var(--mute);font-size:11px">${esc(cloudStatus)}</div>
  ${nav('all','All code',L.length)}${nav('recent','Recent',Math.min(10,L.length))}${nav('fav','Favorites',L.filter(i=>i.fav).length)}
  <div class="grp">Languages</div>${Object.keys(langs).sort().map(l=>nav('lang:'+l,l,langs[l])).join('')||'<small style="color:var(--mute)">None yet</small>'}
  <div class="grp">Folders</div>${S.folders.map(f=>nav('folder:'+f,f,L.filter(i=>i.folder===f).length)).join('')}
@@ -133,7 +176,7 @@ function renderMain(){
  const m=document.getElementById('main'),it=S.items.find(i=>i.id===sel);
  if(!it){
   const L=live(),n=new Set(L.map(i=>i.lang)).size;
-  m.innerHTML=`<h2 style="margin-top:0">Your library</h2><div class="stats"><div><strong>${L.length}</strong>files</div><div><strong>${n}</strong>languages</div><div><strong>${L.filter(i=>i.fav).length}</strong>favorites</div></div><p class="empty" style="text-align:left;padding:0">Select a file to open it. Everything is saved in this browser.</p>`;return;
+  m.innerHTML=`<h2 style="margin-top:0">${cloudConfigured?'Public code vault':'Your library'}</h2><div class="stats"><div><strong>${L.length}</strong>files</div><div><strong>${n}</strong>languages</div><div><strong>${L.filter(i=>i.fav).length}</strong>favorites</div></div><p class="empty" style="text-align:left;padding:0">${cloudConfigured?'Anyone can view, add, edit, or delete code in this shared library.':'Select a file to open it. Everything is saved in this browser.'}</p>`;return;
  }
  const d=draft||it,ro=!!it.deleted;
  m.innerHTML=`<div class="row"><input id="f-title" value="${esc(d.title)}" placeholder="Title" aria-label="Title" ${ro?'disabled':''}><input id="f-file" class="mono" value="${esc(d.filename)}" placeholder="filename.ext" aria-label="Filename" ${ro?'disabled':''}></div>
@@ -228,7 +271,11 @@ function act(a,n){
  else if(a==='vview'){verView=+n;renderMain()}
  else if(a==='vrest'){const v=it.versions.find(v=>v.n===+n);if(v){draft={...readForm(),content:v.content};verView=null;renderMain();renderList();toast('Version loaded. Save to keep it.')}}
 }
-renderAll();
+document.getElementById('main').innerHTML='<p class="empty">Loading CodeVault...</p>';
+startApp();
+window.addEventListener('focus',syncFromCloud);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncFromCloud()});
+setInterval(syncFromCloud,15000);
 </script>
 </body>
 </html>
