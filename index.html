@@ -246,8 +246,35 @@ document.getElementById('side').onchange=async e=>{
 const main=document.getElementById('main');
 main.addEventListener('input',e=>{if(e.target.id==='f-code'||e.target.id==='f-lang')lines();mark()});
 main.addEventListener('scroll',e=>{if(e.target.id==='f-code'){const h=document.getElementById('hl');document.getElementById('ln').scrollTop=h.scrollTop=e.target.scrollTop;h.scrollLeft=e.target.scrollLeft}},true);
+function afterCodeEdit(){lines();mark()}
+function insertPastedCode(t,text){
+ const start=t.selectionStart,end=t.selectionEnd,lineStart=t.value.lastIndexOf('\n',start-1)+1;
+ const before=t.value.slice(lineStart,start),indent=(before.match(/^[\t ]*/)||[''])[0],atIndentOnly=before.trim()==='';
+ const pasted=text.replace(/\r\n?/g,'\n'),parts=pasted.split('\n');
+ if(parts.length===1){t.setRangeText(pasted,start,end,'end');afterCodeEdit();return}
+ const nonblank=parts.filter(line=>line.trim()),baseIndent=nonblank.length?Math.min(...nonblank.map(line=>(line.match(/^[\t ]*/)||[''])[0].length)):0;
+ const adjusted=parts.map((line,index)=>{
+  if(!line.trim())return '';
+  if(index===0&&!atIndentOnly)return line;
+  const body=line.slice(Math.min(baseIndent,(line.match(/^[\t ]*/)||[''])[0].length));
+  return (index===0?'':indent)+body;
+ }).join('\n');
+ t.setRangeText(adjusted,start,end,'end');afterCodeEdit();
+}
+main.addEventListener('paste',e=>{
+ const t=e.target;if(t.id!=='f-code')return;
+ const text=e.clipboardData?.getData('text/plain');if(!text)return;
+ e.preventDefault();insertPastedCode(t,text);
+});
 main.addEventListener('keydown',e=>{
- if(e.target.id==='f-code'&&e.key==='Tab'){e.preventDefault();const t=e.target,s=t.selectionStart;t.setRangeText('  ',s,t.selectionEnd,'end');lines();mark()}
+ if(e.target.id==='f-code'&&e.key==='Tab'){e.preventDefault();const t=e.target,s=t.selectionStart;t.setRangeText('  ',s,t.selectionEnd,'end');afterCodeEdit()}
+ if(e.target.id==='f-code'&&e.key==='Enter'){
+  e.preventDefault();const t=e.target,start=t.selectionStart,end=t.selectionEnd,lineStart=t.value.lastIndexOf('\n',start-1)+1;
+  const before=t.value.slice(lineStart,start),indent=(before.match(/^[\t ]*/)||[''])[0],trimmed=before.trimEnd(),lang=document.getElementById('f-lang').value;
+  const unit=lang==='Python'&&trimmed.endsWith(':')?'    ':'  ',after=t.value.slice(end);
+  const paired=/[({[]\s*$/.test(trimmed)&&/^[\t ]*[)}\]]/.test(after);
+  t.setRangeText(paired?'\n'+indent+unit+'\n'+indent:'\n'+indent+(/[({[]\s*$/.test(trimmed)||lang==='Python'&&trimmed.endsWith(':')?unit:''),start,end,'end');afterCodeEdit();
+ }
  if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();act('save')}
 });
 main.addEventListener('change',e=>{if(e.target.id==='f-file'){const f=e.target.value,l=detect(f,document.getElementById('f-code').value,'auto');document.getElementById('f-lang').value=l;lines();mark()}});
