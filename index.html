@@ -116,7 +116,10 @@ async function writeCloudSnapshot(){
   const{data,error}=await cloud.from('codevault_state').upsert({id:1,payload:snapshot},{onConflict:'id'}).select('updated_at').single();
   if(error)throw error;
   cloudUpdatedAt=data.updated_at;if(revision===cloudRevision)cloudDirty=false;setCloudStatus('Public vault synced');
- }catch(error){setCloudStatus('Sync failed; saved on this device');console.error('CodeVault cloud sync failed:',error)}
+ }catch(error){
+  const reason=(error?.message||String(error)).slice(0,120);
+  setCloudStatus('Sync failed: '+reason);toast('Cloud sync failed: '+reason);console.error('CodeVault cloud sync failed:',error)
+ }
  finally{cloudBusy=false;if(cloudDirty&&revision!==cloudRevision)scheduleCloudWrite()}
 }
 function scheduleCloudWrite(){clearTimeout(cloudWriteTimer);cloudWriteTimer=setTimeout(writeCloudSnapshot,350)}
